@@ -76,6 +76,12 @@
 #include <GLFW/glfw3native.h>   // for glfwGetWin32Window
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+//#include "imgui_internal.h"   // IMGUI_DEBUG_LOG()
+#endif
+
 // We gather version tests as define in order to easily see which features are version-dependent.
 #define GLFW_VERSION_COMBINED           (GLFW_VERSION_MAJOR * 1000 + GLFW_VERSION_MINOR * 100 + GLFW_VERSION_REVISION)
 #ifdef GLFW_RESIZE_NESW_CURSOR          // Let's be nice to people who pulled GLFW between 2019-04-16 (3.4 define) and 2019-11-29 (cursors defines) // FIXME: Remove when GLFW 3.4 is released?
@@ -285,7 +291,9 @@ void ImGui_ImplGlfw_ScrollCallback(GLFWwindow* window, double xoffset, double yo
         bd->PrevUserCallbackScroll(window, xoffset, yoffset);
 
 #ifdef __EMSCRIPTEN__
-    xoffset /= 100.0;
+    // Ignore GLFW events: will be process by Emscripten's specific ImGui_ImplEmscripten_WheelCallback().
+    //IMGUI_DEBUG_LOG("[GLFW] dx: %g, dy: %g\n", xoffset, yoffset);
+    return;
 #endif
 
     ImGuiIO& io = ImGui::GetIO();
@@ -406,6 +414,27 @@ void ImGui_ImplGlfw_MonitorCallback(GLFWmonitor*, int)
 	// Unused in 'master' branch but 'docking' branch will use this, so we declare it ahead of it so if you have to install callbacks you can install this one too.
 }
 
+#ifdef __EMSCRIPTEN__
+static EM_BOOL ImGui_ImplEmscripten_WheelCallback(int, const EmscriptenWheelEvent* ev, void*)
+{
+    // Mimic Emscripten_HandleWheel() in SDL.
+    // Corresponding equivalent in GLFW JS emulation layer has incorrect quantizing preventing small values. See #6096
+    float multiplier = 0.0f;
+    switch (ev->deltaMode)
+    {
+    case DOM_DELTA_PIXEL: multiplier = 1.0f / 100.0f; break;    // 100 pixels make up a step.
+    case DOM_DELTA_LINE:  multiplier = 1.0f / 3.0f; break;      // 3 lines make up a step.
+    case DOM_DELTA_PAGE:  multiplier = 80.0f; break;            // A page makes up 80 steps.
+    }
+    float wheel_x = ev->deltaX * -multiplier;
+    float wheel_y = ev->deltaY * -multiplier;
+    //IMGUI_DEBUG_LOG("[Em] mode %d dx: %.2f, dy: %.2f, dz: %.2f --> feed %.2f %.2f\n", (int)ev->deltaMode, ev->deltaX, ev->deltaY, ev->deltaZ, wheel_x, wheel_y);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMouseWheelEvent(wheel_x, wheel_y);
+    return EM_TRUE;
+}
+#endif
+
 void ImGui_ImplGlfw_InstallCallbacks(GLFWwindow* window)
 {
     ImGui_ImplGlfw_Data* bd = ImGui_ImplGlfw_GetBackendData();
@@ -502,6 +531,13 @@ static bool ImGui_ImplGlfw_Init(GLFWwindow* window, bool install_callbacks, Glfw
     // Chain GLFW callbacks: our callbacks will call the user's previously installed callbacks, if any.
     if (install_callbacks)
         ImGui_ImplGlfw_InstallCallbacks(window);
+
+    // Register Emscripten Wheel callback to workaround issue in Emscripten GLFW Emulation (#6096)
+    // We intentionally do not check 'if (install_callbacks)' here, as some users may set it to false and call GLFW callback themselves.
+    // FIXME: May break chaining in case user registered their own Emscripten callback?
+#ifdef __EMSCRIPTEN__
+    emscripten_set_wheel_callback(EMSCRIPTEN_EVENT_TARGET_DOCUMENT, NULL, false, ImGui_ImplEmscripten_WheelCallback);
+#endif
 
     bd->ClientApi = client_api;
     return true;
