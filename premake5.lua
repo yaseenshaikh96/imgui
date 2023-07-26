@@ -7,7 +7,6 @@ project "Imgui"
     	targetdir ( "%{wks.location}/bin/" .. outputdir)
     	objdir ( "%{wks.location}/bin-int/" .. outputdir)
 
-
 	files
 	{
 		"imconfig.h",
